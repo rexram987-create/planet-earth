@@ -31,8 +31,26 @@ let original;gltf.scene.traverse(o=>{if(o.isMesh&&!original)original=o;});if(!or
 const geometry=original.geometry.clone();geometry.computeBoundingSphere();const radius=geometry.boundingSphere.radius;geometry.scale(1/radius,1/radius,1/radius);geometry.computeVertexNormals();
 const system=new THREE.Group();system.rotation.z=THREE.MathUtils.degToRad(-23.4);scene.add(system);const globe=new THREE.Group();system.add(globe);globe.rotation.y=-Math.PI/2;
 const sunView={value:new THREE.Vector3()};
-const earthMat=new THREE.MeshPhongMaterial({map:day,bumpMap:bump,bumpScale:.012,specularMap:water,specular:0x334858,shininess:22,emissiveMap:night,emissive:0xffffff,emissiveIntensity:1.2});
-earthMat.onBeforeCompile=shader=>{shader.uniforms.sunView=sunView;shader.fragmentShader='uniform vec3 sunView;\n'+shader.fragmentShader;shader.fragmentShader=shader.fragmentShader.replace('#include <emissivemap_fragment>','#include <emissivemap_fragment>\n totalEmissiveRadiance *= 1.0 - smoothstep(-0.14,0.1,dot(normalize(vNormal),normalize(sunView)));');};
+const nightLightIntensity=3.0;
+const earthMat=new THREE.MeshPhongMaterial({map:day,bumpMap:bump,bumpScale:.012,specularMap:water,specular:0x334858,shininess:22,emissiveMap:night,emissive:0xffcf88,emissiveIntensity:nightLightIntensity});
+// Lift dim city pixels from the original model's map, keeping black oceans dark.
+// Both normals and the Sun direction are in view space, so the mask follows
+// the physical night side even while the camera or globe rotates.
+earthMat.onBeforeCompile=shader=>{
+  shader.uniforms.sunView=sunView;
+  shader.fragmentShader='uniform vec3 sunView;\n'+shader.fragmentShader;
+  shader.fragmentShader=shader.fragmentShader.replace('#include <emissivemap_fragment>', `
+    #ifdef USE_EMISSIVEMAP
+      vec3 cityMap = texture2D(emissiveMap, vEmissiveMapUv).rgb;
+      float cityBrightness = max(max(cityMap.r, cityMap.g), cityMap.b);
+      float citySignal = smoothstep(0.0003, 0.003, cityBrightness);
+      vec3 cityLights = pow(max(cityMap, vec3(0.0)), vec3(0.55)) * citySignal;
+      float nightMask = 1.0 - smoothstep(-0.22, 0.02,
+        dot(normalize(vNormal), normalize(sunView)));
+      totalEmissiveRadiance *= cityLights * nightMask;
+    #endif
+  `);
+};
 const earth=new THREE.Mesh(geometry,earthMat);globe.add(earth);
 const clouds=new THREE.Mesh(geometry,new THREE.MeshPhongMaterial({color:0xffffff,alphaMap:cloudMap,transparent:true,opacity:.77,depthWrite:false,shininess:0}));clouds.scale.setScalar(1.009);globe.add(clouds);
 const atmos=new THREE.Mesh(geometry,new THREE.ShaderMaterial({uniforms:{glow:{value:new THREE.Color(0x449cff)}},vertexShader:'varying vec3 n; varying vec3 v; void main(){ vec4 p=modelViewMatrix*vec4(position,1.0);n=normalize(normalMatrix*normal);v=normalize(-p.xyz);gl_Position=projectionMatrix*p;}',fragmentShader:'uniform vec3 glow;varying vec3 n;varying vec3 v;void main(){float rim=pow(1.0-abs(dot(normalize(n),normalize(v))),3.8);gl_FragColor=vec4(glow,rim*0.38);}',transparent:true,side:THREE.BackSide,blending:THREE.AdditiveBlending,depthWrite:false}));atmos.scale.setScalar(1.035);system.add(atmos);
@@ -41,7 +59,7 @@ function setPlaying(value){playing=value;$('play').setAttribute('aria-pressed',S
 $('play').onclick=()=>setPlaying(!playing);
 $('speed').oninput=()=>{period=[120,60,20][Number($('speed').value)];const label=`יום ב־${period} שניות`;$('speed-label').textContent=label;$('speed').setAttribute('aria-valuetext',label);};
 $('clouds').onchange=()=>clouds.visible=$('clouds').checked;
-$('light').onchange=()=>{ambient.intensity=$('light').checked?2.4:.25;sun.intensity=$('light').checked?1.1:3.1;earthMat.emissiveIntensity=$('light').checked?0:1.2;};
+$('light').onchange=()=>{ambient.intensity=$('light').checked?2.4:.25;sun.intensity=$('light').checked?1.1:3.1;earthMat.emissiveIntensity=$('light').checked?0:nightLightIntensity;};
 const initial=new THREE.Vector3(0,.35,4.3);let fitDistance=4.3;
 function zoom(factor){camera.position.multiplyScalar(THREE.MathUtils.clamp(camera.position.length()*factor,controls.minDistance,controls.maxDistance)/camera.position.length());controls.update();}
 function rotate(amount){camera.position.applyAxisAngle(new THREE.Vector3(0,1,0),amount);controls.update();}
